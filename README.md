@@ -235,14 +235,7 @@ MIT
 
 如果这些工具对你有帮助，欢迎请我喝杯咖啡 ☕
 
-### 微信赞赏
 ![微信赞赏码](https://raw.githubusercontent.com/zsc-glitch/assets/main/wechat-pay.png)
-
-### 支付宝
-![支付宝收款码](https://raw.githubusercontent.com/zsc-glitch/assets/main/alipay.png)
-
-### GitHub Sponsors
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-lightgrey?logo=github)](https://github.com/sponsors/zsc-glitch)
 
 ---
 
