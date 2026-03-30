@@ -1,0 +1,46 @@
+{
+  "name": "@zsc-glitch/daily-logger",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "自动记录每日活动，生成健康与生活日志报告",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "daily",
+    "log",
+    "journal",
+    "health"
+  ],
+  "author": "zsc-glitch",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zsc-glitch/daily-logger.git"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"]
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "SKILL.md",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "openclaw": ">=2026.0.0",
+    "@sinclair/typebox": ">=0.34.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

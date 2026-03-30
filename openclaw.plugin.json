@@ -1,0 +1,30 @@
+{
+  "id": "daily-logger",
+  "name": "Daily Logger",
+  "description": "自动记录每日活动，生成健康与生活日志报告",
+  "version": "1.0.0",
+  "author": "zsc-glitch",
+  "homepage": "https://github.com/zsc-glitch/daily-logger",
+  "skills": ["./SKILL.md"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "logDir": {
+        "type": "string",
+        "description": "日志存储目录",
+        "default": "~/.daily-logs"
+      },
+      "autoSummary": {
+        "type": "boolean",
+        "description": "自动生成日报",
+        "default": false
+      },
+      "linkToKnowledgeKeeper": {
+        "type": "boolean",
+        "description": "关联 Knowledge Keeper",
+        "default": false
+      }
+    },
+    "additionalProperties": false
+  }
+}
