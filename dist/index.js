@@ -134,6 +134,46 @@ async function appendActivity(logDir, log) {
     }
     await fs.writeFile(logPath, content, "utf-8");
 }
+// 获取索引文件路径
+function getManifestPath(logDir) {
+    return path.join(logDir, ".manifest.json");
+}
+// 加载索引
+async function loadManifest(logDir) {
+    try {
+        const content = await fs.readFile(getManifestPath(logDir), "utf-8");
+        return JSON.parse(content);
+    }
+    catch {
+        return [];
+    }
+}
+// 保存索引
+async function saveManifest(logDir, manifest) {
+    await ensureDir(logDir);
+    await fs.writeFile(getManifestPath(logDir), JSON.stringify(manifest, null, 2), "utf-8");
+}
+// 重建索引
+async function rebuildManifest(logDir) {
+    const manifest = [];
+    const files = await fs.readdir(logDir);
+    const logFiles = files.filter(f => f.endsWith(".md")).sort();
+    for (const file of logFiles) {
+        const logPath = path.join(logDir, file);
+        const activities = await parseLogActivities(logPath);
+        for (const act of activities) {
+            manifest.push({ ...act, file });
+        }
+    }
+    await saveManifest(logDir, manifest);
+    return manifest;
+}
+// 索引添加单条记录
+async function indexActivity(logDir, act, file) {
+    const manifest = await loadManifest(logDir);
+    manifest.push({ ...act, file });
+    await saveManifest(logDir, manifest);
+}
 // 活动类型 Schema
 const ActivityTypeSchema = Type.Union([
     Type.Literal("sleep"),
@@ -186,6 +226,8 @@ export default definePluginEntry({
                         date: getTodayDate(),
                     };
                     await appendActivity(logDir, log);
+                    await indexActivity(logDir, log, `${log.date}.md`);
+
                     const typeLabels = {
                         sleep: "睡眠",
                         meal: "餐饮",
@@ -266,9 +308,17 @@ export default definePluginEntry({
                         allActivities.push(...activities);
                     }
                     // 按类型筛选
-                    const filtered = params.type
+                    let filtered = params.type
                         ? allActivities.filter(a => a.type === params.type)
                         : allActivities;
+
+                    // 【修复】按日期+时间倒序排列，最新的在前
+                    filtered.sort((a, b) => {
+                        const dateCompare = b.date.localeCompare(a.date);
+                        if (dateCompare !== 0) return dateCompare;
+                        return b.timestamp.localeCompare(a.timestamp);
+                    });
+
                     // 统计
                     const stats = {
                         sleep: 0,
@@ -356,27 +406,31 @@ export default definePluginEntry({
             async execute(toolCallId, params) {
                 try {
                     const logDir = getLogDir(config);
-                    const limit = params.limit || 20;
-                    // 获取所有日志文件
-                    const files = await fs.readdir(logDir);
-                    const logFiles = files.filter(f => f.endsWith(".md")).sort().reverse();
-                    const results = [];
-                    const queryLower = params.query.toLowerCase();
-                    for (const file of logFiles) {
-                        if (results.length >= limit)
-                            break;
-                        const logPath = path.join(logDir, file);
-                        const activities = await parseLogActivities(logPath);
-                        for (const act of activities) {
-                            if (params.type && act.type !== params.type)
-                                continue;
-                            if (act.content.toLowerCase().includes(queryLower)) {
-                                results.push(act);
-                                if (results.length >= limit)
-                                    break;
-                            }
-                        }
+                    const limit = Math.min(params.limit || 20, 100);
+
+                    let manifest = await loadManifest(logDir);
+                    // 如果索引为空，先重建
+                    if (manifest.length === 0) {
+                        manifest = await rebuildManifest(logDir);
                     }
+
+                    const queryLower = params.query.toLowerCase();
+
+                    // 从索引筛选（内存操作，极快）
+                    let results = manifest.filter(act => {
+                        if (params.type && act.type !== params.type) return false;
+                        return act.content.toLowerCase().includes(queryLower);
+                    });
+
+                    // 按日期倒序
+                    results.sort((a, b) => {
+                        const dateCompare = b.date.localeCompare(a.date);
+                        if (dateCompare !== 0) return dateCompare;
+                        return b.timestamp.localeCompare(a.timestamp);
+                    });
+
+                    results = results.slice(0, limit);
+
                     if (results.length === 0) {
                         return {
                             content: [
@@ -389,7 +443,7 @@ export default definePluginEntry({
                         };
                     }
                     const resultText = results
-                        .map((act, i) => `${i + 1}. ${act.date} ${getTimeString(new Date(act.timestamp))} ${act.content}`)
+                        .map((act, i) => `${i + 1}. ${act.date} ${act.timestamp} ${act.content}`)
                         .join("\n");
                     return {
                         content: [
@@ -414,6 +468,41 @@ export default definePluginEntry({
                 }
             },
         }, { optional: true });
+
+        // 重建索引工具
+        api.registerTool({
+            name: "rebuild_index",
+            label: "重建索引",
+            description: "强制重建搜索索引",
+            parameters: Type.Object({}),
+            async execute(toolCallId) {
+                try {
+                    const logDir = getLogDir(config);
+                    const manifest = await rebuildManifest(logDir);
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `✅ 索引重建完成\n\n共索引 ${manifest.length} 条活动记录`,
+                            },
+                        ],
+                        details: { count: manifest.length },
+                    };
+                }
+                catch (error) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `❌ 索引重建失败: ${error instanceof Error ? error.message : String(error)}`,
+                            },
+                        ],
+                        details: { error: true },
+                    };
+                }
+            },
+        }, { optional: true });
+
         // 导出日志工具
         api.registerTool({
             name: "export_logs",

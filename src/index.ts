@@ -29,10 +29,25 @@ interface LoggerConfig {
   linkToKnowledgeKeeper?: boolean;
 }
 
+// 索引条目
+interface ManifestEntry {
+  id: string;
+  type: ActivityType;
+  content: string;
+  timestamp: string;
+  date: string;
+  file: string; // 所在文件
+}
+
 // 获取日志目录
 function getLogDir(config?: LoggerConfig): string {
   const dir = config?.logDir || process.env.DAILY_LOG_DIR || "~/.daily-logs";
   return dir.replace("~", os.homedir());
+}
+
+// 获取索引文件路径
+function getManifestPath(logDir: string): string {
+  return path.join(logDir, ".manifest.json");
 }
 
 // 获取今天的日期字符串
@@ -65,6 +80,40 @@ function getLogFilePath(logDir: string, date: string): string {
   return path.join(logDir, `${date}.md`);
 }
 
+// 加载索引
+async function loadManifest(logDir: string): Promise<ManifestEntry[]> {
+  try {
+    const content = await fs.readFile(getManifestPath(logDir), "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return [];
+  }
+}
+
+// 保存索引
+async function saveManifest(logDir: string, manifest: ManifestEntry[]): Promise<void> {
+  await ensureDir(logDir);
+  await fs.writeFile(getManifestPath(logDir), JSON.stringify(manifest, null, 2), "utf-8");
+}
+
+// 重建索引（扫描所有日志文件）
+async function rebuildManifest(logDir: string): Promise<ManifestEntry[]> {
+  const manifest: ManifestEntry[] = [];
+  const files = await fs.readdir(logDir);
+  const logFiles = files.filter(f => f.endsWith(".md")).sort();
+
+  for (const file of logFiles) {
+    const logPath = path.join(logDir, file);
+    const activities = await parseLogActivities(logPath);
+    for (const act of activities) {
+      manifest.push({ ...act, file });
+    }
+  }
+
+  await saveManifest(logDir, manifest);
+  return manifest;
+}
+
 // 格式化单条活动为 Markdown
 function formatActivityMarkdown(log: ActivityLog): string {
   const time = getTimeString(new Date(log.timestamp));
@@ -87,9 +136,8 @@ async function parseLogActivities(logPath: string): Promise<ActivityLog[]> {
     const content = await fs.readFile(logPath, "utf-8");
     const lines = content.split("\n");
     const activities: ActivityLog[] = [];
-    
+
     for (const line of lines) {
-      // 解析格式: - HH:MM emoji content
       const match = line.match(/^- (\d{2}:\d{2}) (😴|🍽️|🏃|😊|💼|🎮|🏥|📝) (.+)$/);
       if (match) {
         const [, time, emoji, content] = match;
@@ -112,7 +160,7 @@ async function parseLogActivities(logPath: string): Promise<ActivityLog[]> {
         });
       }
     }
-    
+
     return activities;
   } catch {
     return [];
@@ -123,16 +171,14 @@ async function parseLogActivities(logPath: string): Promise<ActivityLog[]> {
 async function appendActivity(logDir: string, log: ActivityLog): Promise<void> {
   await ensureDir(logDir);
   const logPath = getLogFilePath(logDir, log.date);
-  
+
   let content = "";
   try {
     content = await fs.readFile(logPath, "utf-8");
   } catch {
-    // 文件不存在，创建新的日志文件
     content = `# ${log.date}\n\n`;
   }
-  
-  // 确定添加到哪个 section
+
   const sections: Record<ActivityType, string> = {
     sleep: "## 睡眠\n",
     meal: "## 餐饮\n",
@@ -143,28 +189,30 @@ async function appendActivity(logDir: string, log: ActivityLog): Promise<void> {
     health: "## 健康\n",
     custom: "## 其他\n",
   };
-  
+
   const sectionHeader = sections[log.type];
   const activityLine = formatActivityMarkdown(log);
-  
-  // 检查是否已存在对应 section
+
   if (content.includes(sectionHeader)) {
-    // 在 section 后追加
     const sectionIndex = content.indexOf(sectionHeader);
     const nextSectionIndex = content.indexOf("\n## ", sectionIndex + 1);
     if (nextSectionIndex === -1) {
-      // 没有下一个 section，追加到文件末尾
       content = content.trimEnd() + "\n" + activityLine + "\n";
     } else {
-      // 在下一个 section 前插入
       content = content.slice(0, nextSectionIndex) + activityLine + "\n" + content.slice(nextSectionIndex);
     }
   } else {
-    // 创建新的 section
     content = content.trimEnd() + "\n\n" + sectionHeader + activityLine + "\n";
   }
-  
+
   await fs.writeFile(logPath, content, "utf-8");
+}
+
+// 更新索引：添加单条记录
+async function indexActivity(logDir: string, act: ActivityLog, file: string): Promise<void> {
+  const manifest = await loadManifest(logDir);
+  manifest.push({ ...act, file });
+  await saveManifest(logDir, manifest);
 }
 
 // 活动类型 Schema
@@ -216,7 +264,7 @@ export default definePluginEntry({
         try {
           const logDir = getLogDir(config);
           const now = new Date();
-          
+
           const log: ActivityLog = {
             id: generateId(),
             type: params.type,
@@ -224,9 +272,10 @@ export default definePluginEntry({
             timestamp: params.timestamp || now.toISOString(),
             date: getTodayDate(),
           };
-          
+
           await appendActivity(logDir, log);
-          
+          await indexActivity(logDir, log, `${log.date}.md`);
+
           const typeLabels: Record<ActivityType, string> = {
             sleep: "睡眠",
             meal: "餐饮",
@@ -237,7 +286,7 @@ export default definePluginEntry({
             health: "健康",
             custom: "其他",
           };
-          
+
           return {
             content: [
               {
@@ -274,11 +323,11 @@ export default definePluginEntry({
         try {
           const logDir = getLogDir(config);
           const now = new Date();
-          
+
           // 确定日期范围
           const dates: string[] = [];
           let startDate: Date;
-          
+
           switch (params.period) {
             case "today":
               dates.push(getTodayDate());
@@ -302,7 +351,7 @@ export default definePluginEntry({
               }
               break;
           }
-          
+
           // 收集所有活动
           const allActivities: ActivityLog[] = [];
           for (const date of dates) {
@@ -310,12 +359,19 @@ export default definePluginEntry({
             const activities = await parseLogActivities(logPath);
             allActivities.push(...activities);
           }
-          
+
           // 按类型筛选
-          const filtered = params.type
+          let filtered = params.type
             ? allActivities.filter(a => a.type === params.type)
             : allActivities;
-          
+
+          // 【修复】按日期+时间倒序排列，最新的在前
+          filtered.sort((a, b) => {
+            const dateCompare = b.date.localeCompare(a.date);
+            if (dateCompare !== 0) return dateCompare;
+            return b.timestamp.localeCompare(a.timestamp);
+          });
+
           // 统计
           const stats: Record<ActivityType, number> = {
             sleep: 0,
@@ -327,18 +383,18 @@ export default definePluginEntry({
             health: 0,
             custom: 0,
           };
-          
+
           for (const act of filtered) {
             stats[act.type]++;
           }
-          
+
           const periodLabels: Record<string, string> = {
             today: "今天",
             yesterday: "昨天",
             week: "最近一周",
             month: "最近一个月",
           };
-          
+
           const typeLabels: Record<ActivityType, string> = {
             sleep: "睡眠",
             meal: "餐饮",
@@ -349,7 +405,7 @@ export default definePluginEntry({
             health: "健康",
             custom: "其他",
           };
-          
+
           if (filtered.length === 0) {
             return {
               content: [
@@ -361,19 +417,19 @@ export default definePluginEntry({
               details: { stats, count: 0 },
             };
           }
-          
+
           // 构建报告内容
           const statsText = Object.entries(stats)
             .filter(([, count]) => count > 0)
             .map(([type, count]) => `- ${typeLabels[type as ActivityType]}: ${count} 条`)
             .join("\n");
-          
-          // 最近的活动
+
+          // 最近的活动（已排序，直接取前15条）
           const recentText = filtered
             .slice(0, 15)
-            .map((act, i) => `${i + 1}. ${act.date} ${getTimeString(new Date(act.timestamp))} ${act.content}`)
+            .map((act, i) => `${i + 1}. ${act.date} ${act.timestamp} ${act.content}`)
             .join("\n");
-          
+
           return {
             content: [
               {
@@ -410,31 +466,33 @@ export default definePluginEntry({
       async execute(toolCallId, params) {
         try {
           const logDir = getLogDir(config);
-          const limit = params.limit || 20;
-          
-          // 获取所有日志文件
-          const files = await fs.readdir(logDir);
-          const logFiles = files.filter(f => f.endsWith(".md")).sort().reverse();
-          
-          const results: ActivityLog[] = [];
-          const queryLower = params.query.toLowerCase();
-          
-          for (const file of logFiles) {
-            if (results.length >= limit) break;
-            
-            const logPath = path.join(logDir, file);
-            const activities = await parseLogActivities(logPath);
-            
-            for (const act of activities) {
-              if (params.type && act.type !== params.type) continue;
-              
-              if (act.content.toLowerCase().includes(queryLower)) {
-                results.push(act);
-                if (results.length >= limit) break;
-              }
-            }
+          const limit = Math.min(params.limit || 20, 100);
+
+          let manifest = await loadManifest(logDir);
+
+          // 如果索引为空，先重建
+          if (manifest.length === 0) {
+            manifest = await rebuildManifest(logDir);
           }
-          
+
+          const queryLower = params.query.toLowerCase();
+          const today = getTodayDate();
+
+          // 从索引筛选（内存操作，极快）
+          let results = manifest.filter(act => {
+            if (params.type && act.type !== params.type) return false;
+            return act.content.toLowerCase().includes(queryLower);
+          });
+
+          // 按日期倒序
+          results.sort((a, b) => {
+            const dateCompare = b.date.localeCompare(a.date);
+            if (dateCompare !== 0) return dateCompare;
+            return b.timestamp.localeCompare(a.timestamp);
+          });
+
+          results = results.slice(0, limit);
+
           if (results.length === 0) {
             return {
               content: [
@@ -446,11 +504,11 @@ export default definePluginEntry({
               details: { count: 0 },
             };
           }
-          
+
           const resultText = results
-            .map((act, i) => `${i + 1}. ${act.date} ${getTimeString(new Date(act.timestamp))} ${act.content}`)
+            .map((act, i) => `${i + 1}. ${act.date} ${act.timestamp} ${act.content}`)
             .join("\n");
-          
+
           return {
             content: [
               {
@@ -474,6 +532,39 @@ export default definePluginEntry({
       },
     }, { optional: true });
 
+    // 重建索引工具
+    api.registerTool({
+      name: "rebuild_index",
+      label: "重建索引",
+      description: "强制重建搜索索引",
+      parameters: Type.Object({}),
+      async execute(toolCallId) {
+        try {
+          const logDir = getLogDir(config);
+          const manifest = await rebuildManifest(logDir);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `✅ 索引重建完成\n\n共索引 ${manifest.length} 条活动记录`,
+              },
+            ],
+            details: { count: manifest.length },
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `❌ 索引重建失败: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            ],
+            details: { error: true },
+          };
+        }
+      },
+    }, { optional: true });
+
     // 导出日志工具
     api.registerTool({
       name: "export_logs",
@@ -487,11 +578,11 @@ export default definePluginEntry({
         try {
           const logDir = getLogDir(config);
           const now = new Date();
-          
+
           // 确定日期范围
           let dates: string[] = [];
           const period = params.period || "month";
-          
+
           switch (period) {
             case "today":
               dates.push(getTodayDate());
@@ -515,7 +606,7 @@ export default definePluginEntry({
               }
               break;
           }
-          
+
           // 收集所有活动
           const allActivities: ActivityLog[] = [];
           for (const date of dates) {
@@ -523,7 +614,7 @@ export default definePluginEntry({
             const activities = await parseLogActivities(logPath);
             allActivities.push(...activities);
           }
-          
+
           if (allActivities.length === 0) {
             return {
               content: [
@@ -532,15 +623,15 @@ export default definePluginEntry({
               details: { count: 0 },
             };
           }
-          
+
           // 导出文件
           const ext = params.format === "json" ? "json" : "md";
           const exportPath = path.join(logDir, `export-${now.toISOString().slice(0, 10)}.${ext}`);
-          
+
           if (params.format === "json") {
             await fs.writeFile(exportPath, JSON.stringify(allActivities, null, 2), "utf-8");
           } else {
-            // Markdown 格式导出所有日志文件内容
+            // Markdown 格式：逐文件读取，单个失败不影响其他
             let mdContent = "# 日志导出\n\n";
             for (const date of dates) {
               const logPath = getLogFilePath(logDir, date);
@@ -548,12 +639,12 @@ export default definePluginEntry({
                 const content = await fs.readFile(logPath, "utf-8");
                 mdContent += content + "\n\n---\n\n";
               } catch {
-                // 文件不存在
+                // 文件不存在，直接跳过，不中断导出
               }
             }
             await fs.writeFile(exportPath, mdContent, "utf-8");
           }
-          
+
           return {
             content: [
               {
