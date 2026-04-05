@@ -60,10 +60,11 @@ function getTimeString(date: Date): string {
   return date.toTimeString().slice(0, 5);
 }
 
-// 生成活动 ID
+// 生成活动 ID（时间戳 + 8位随机）
 function generateId(): string {
-  const rand = Math.random().toString(36).slice(2, 6);
-  return `act-${rand}`;
+  const timestamp = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `act-${timestamp}-${rand}`;
 }
 
 // 确保目录存在
@@ -90,10 +91,13 @@ async function loadManifest(logDir: string): Promise<ManifestEntry[]> {
   }
 }
 
-// 保存索引
+// 保存索引（原子写入）
 async function saveManifest(logDir: string, manifest: ManifestEntry[]): Promise<void> {
   await ensureDir(logDir);
-  await fs.writeFile(getManifestPath(logDir), JSON.stringify(manifest, null, 2), "utf-8");
+  const manifestPath = getManifestPath(logDir);
+  const tmpPath = path.join(logDir, ".manifest.json.tmp");
+  await fs.writeFile(tmpPath, JSON.stringify(manifest, null, 2), "utf-8");
+  await fs.rename(tmpPath, manifestPath);
 }
 
 // 重建索引（扫描所有日志文件）
