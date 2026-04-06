@@ -1,6 +1,6 @@
 {
   "name": "@zsc-glitch/daily-logger",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "自动记录每日活动，生成健康与生活日志报告",
   "main": "dist/index.js",
